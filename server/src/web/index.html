@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BetterSearch</title>
+    <style>
+      :root {
+        --bg: #0b0d12;
+        --panel: #141821;
+        --panel-2: #1b2130;
+        --border: #262d3d;
+        --text: #e6e9f0;
+        --muted: #8a93a6;
+        --accent: #5b8cff;
+        --accent-2: #7c5bff;
+        --good: #3ecf8e;
+        --radius: 14px;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: radial-gradient(1200px 700px at 70% -10%, #16203a 0%, var(--bg) 55%);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      .wrap { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 28px; }
+      .brand { display: flex; align-items: center; gap: 11px; }
+      .logo {
+        width: 34px; height: 34px; border-radius: 9px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        display: grid; place-items: center; font-weight: 800; color: #fff;
+      }
+      h1 { font-size: 19px; margin: 0; letter-spacing: -0.2px; }
+      .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+      .token {
+        background: var(--panel); border: 1px solid var(--border); color: var(--text);
+        padding: 8px 11px; border-radius: 9px; font-size: 12.5px; width: 190px; outline: none;
+      }
+      .token:focus { border-color: var(--accent); }
+      .searchbar {
+        display: flex; gap: 10px; background: var(--panel); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 8px 8px 8px 16px; box-shadow: 0 10px 40px -20px #000;
+      }
+      .searchbar input {
+        flex: 1; background: transparent; border: 0; color: var(--text);
+        font-size: 16px; outline: none;
+      }
+      button.go {
+        background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff;
+        border: 0; border-radius: 10px; padding: 0 20px; font-weight: 600; cursor: pointer;
+        font-size: 14.5px;
+      }
+      button.go:disabled { opacity: 0.5; cursor: default; }
+      .filters { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+      .chip {
+        background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+        padding: 5px 12px; border-radius: 999px; font-size: 12.5px; cursor: pointer; user-select: none;
+      }
+      .chip.active { color: #fff; border-color: var(--accent); background: #1f2942; }
+      .answer {
+        margin-top: 26px; background: var(--panel); border: 1px solid var(--border);
+        border-left: 3px solid var(--good); border-radius: var(--radius); padding: 18px 20px;
+        white-space: pre-wrap; display: none;
+      }
+      .answer .label { color: var(--good); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+      .sources { margin-top: 22px; display: grid; gap: 12px; }
+      .card {
+        background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+        transition: border-color 0.15s;
+      }
+      .card:hover { border-color: #34405c; }
+      .card .meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-bottom: 7px; }
+      .pill { background: var(--panel-2); border: 1px solid var(--border); padding: 2px 8px; border-radius: 6px; }
+      .pill.file { color: var(--accent); border-color: #2c3a63; }
+      .card .body { font-size: 13.5px; color: #cfd5e3; max-height: 150px; overflow: hidden; white-space: pre-wrap; }
+      .card a.jump { float: right; color: var(--accent); text-decoration: none; font-size: 12px; }
+      .card a.jump:hover { text-decoration: underline; }
+      .empty, .status { color: var(--muted); text-align: center; margin-top: 40px; font-size: 14px; }
+      .score { color: #5d6577; font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="brand">
+          <div class="logo">B</div>
+          <div>
+            <h1>BetterSearch</h1>
+            <div class="sub">Semantic search over your Discord work history</div>
+          </div>
+        </div>
+        <input id="token" class="token" type="password" placeholder="API token" />
+      </header>
+
+      <div class="searchbar">
+        <input id="q" placeholder="Search messages, screenshots, docs… e.g. staging database password" autofocus />
+        <button id="go" class="go">Search</button>
+      </div>
+      <div class="filters">
+        <span class="chip" data-filter="synth" id="chip-synth">AI answer</span>
+        <span class="chip" data-filter="dm" id="chip-dm">DMs only</span>
+        <span class="chip" data-filter="files" id="chip-files">Files only</span>
+      </div>
+
+      <div id="answer" class="answer"></div>
+      <div id="sources" class="sources"></div>
+      <div id="status" class="status">Enter your API token and a query to begin.</div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const tokenEl = $("token");
+      tokenEl.value = localStorage.getItem("bs_token") || "";
+      tokenEl.addEventListener("change", () => localStorage.setItem("bs_token", tokenEl.value.trim()));
+
+      const state = { synth: true, dm: false, files: false };
+      $("chip-synth").classList.toggle("active", state.synth);
+      document.querySelectorAll(".chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const k = chip.dataset.filter;
+          state[k] = !state[k];
+          chip.classList.toggle("active", state[k]);
+        });
+      });
+
+      function esc(s) {
+        return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+      }
+
+      async function doSearch() {
+        const query = $("q").value.trim();
+        const token = tokenEl.value.trim();
+        if (!query) return;
+        if (!token) { $("status").textContent = "Please enter your API token (BS_API_TOKEN)."; return; }
+
+        $("go").disabled = true;
+        $("status").textContent = "Searching…";
+        $("answer").style.display = "none";
+        $("sources").innerHTML = "";
+
+        const filter = {};
+        if (state.dm) filter.isDM = { $eq: true };
+        if (state.files) filter.sourceType = { $eq: "attachment" };
+
+        try {
+          const res = await fetch("/search", {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: "Bearer " + token },
+            body: JSON.stringify({
+              query,
+              topK: 12,
+              synthesize: state.synth,
+              filter: Object.keys(filter).length ? filter : undefined,
+            }),
+          });
+          if (!res.ok) {
+            $("status").textContent = res.status === 401 ? "Unauthorized — check your API token." : "Error: " + res.status;
+            return;
+          }
+          const data = await res.json();
+          render(data);
+        } catch (e) {
+          $("status").textContent = "Request failed: " + e.message;
+        } finally {
+          $("go").disabled = false;
+        }
+      }
+
+      function render(data) {
+        if (data.answer) {
+          $("answer").innerHTML = '<div class="label">Answer</div>' + esc(data.answer);
+          $("answer").style.display = "block";
+        }
+        if (!data.sources || data.sources.length === 0) {
+          $("status").textContent = "No matching messages found.";
+          return;
+        }
+        $("status").textContent = "";
+        $("sources").innerHTML = data.sources
+          .map((s, i) => {
+            const date = s.timestamp ? new Date(s.timestamp).toLocaleString() : "";
+            const where = s.isDM ? "DM" : "#" + esc(s.channelName);
+            const filePill = s.sourceType === "attachment"
+              ? `<span class="pill file">📎 ${esc(s.attachmentName || "file")}</span>` : "";
+            return `<div class="card">
+              <a class="jump" href="${esc(s.jumpLink)}" target="_blank" rel="noopener">open in Discord ↗</a>
+              <div class="meta">
+                <span class="pill">${i + 1}</span>
+                <strong style="color:#cfd5e3">${esc(s.authorName)}</strong>
+                <span>${where}</span>${filePill}
+                <span>${esc(date)}</span>
+                <span class="score">· ${s.score.toFixed(3)}</span>
+              </div>
+              <div class="body">${esc(s.text)}</div>
+            </div>`;
+          })
+          .join("");
+      }
+
+      $("go").addEventListener("click", doSearch);
+      $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+    </script>
+  </body>
+</html>
