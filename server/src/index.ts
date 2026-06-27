@@ -4,7 +4,7 @@ import { config } from "./config.ts";
 import { ensureIndex } from "./pinecone.ts";
 import { ingestMessages } from "./ingest.ts";
 import { runSearch } from "./search.ts";
-import { stats } from "./db.ts";
+import { stats, getCursor, setBackfillComplete } from "./db.ts";
 import type { IngestBody, SearchBody } from "./types.ts";
 
 const CORS = {
@@ -60,6 +60,20 @@ const server = Bun.serve({
       if (!Array.isArray(body?.messages)) return json({ error: "messages[] required" }, 400);
       const result = await ingestMessages(body.messages);
       return json(result);
+    }
+
+    // Resume/catch-up state for a channel. Optionally mark backfill complete.
+    if (url.pathname === "/cursor" && req.method === "POST") {
+      if (!authorized(req)) return json({ error: "unauthorized" }, 401);
+      let body: { channelId?: string; complete?: boolean };
+      try {
+        body = (await req.json()) as any;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      if (!body?.channelId) return json({ error: "channelId required" }, 400);
+      if (typeof body.complete === "boolean") setBackfillComplete(body.channelId, body.complete);
+      return json(getCursor(body.channelId));
     }
 
     if (url.pathname === "/search" && req.method === "POST") {

@@ -48,6 +48,14 @@ function channelName(channel: any, isDM: boolean): string {
     return isDM ? "Direct Message" : "channel";
 }
 
+/** Human-readable label for a channel id (e.g. "#ops" / "Alex" for a DM). */
+export function channelLabel(channelId: string): string {
+    const channel = ChannelStore.getChannel(channelId);
+    const isDM = !channel?.guild_id;
+    const name = channelName(channel, isDM);
+    return isDM ? name : "#" + name;
+}
+
 function toISO(ts: RawMessage["timestamp"]): string {
     if (!ts) return new Date().toISOString();
     const d = new Date(ts as any);
@@ -58,6 +66,10 @@ function toISO(ts: RawMessage["timestamp"]): string {
 export function normalize(raw: RawMessage): NormalizedMessage | null {
     const channelId = raw.channel_id;
     if (!channelId || !raw.id) return null;
+
+    // Skip Vencord's local "Clyde" bot replies (our own command output) — they
+    // carry author id "1" and are ephemeral, so indexing them just pollutes search.
+    if (raw.author?.id === "1") return null;
 
     const channel = ChannelStore.getChannel(channelId);
     const guildId: string | null = channel?.guild_id ?? null;

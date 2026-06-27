@@ -25,3 +25,16 @@ export async function send<T = any>(path: string, payload: unknown): Promise<T> 
         return res.body as unknown as T;
     }
 }
+
+export interface Cursor {
+    /** Oldest message id we've backfilled so far (resume backward from here). */
+    oldest: string | null;
+    /** Newest message id we've ingested (catch up forward from here). */
+    newest: string | null;
+    complete: boolean;
+}
+
+/** Read (and optionally update) a channel's ingest cursor for resume/catch-up. */
+export function cursor(channelId: string, complete?: boolean): Promise<Cursor> {
+    return send<Cursor>("/cursor", { channelId, complete });
+}

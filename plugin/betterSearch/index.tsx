@@ -10,11 +10,12 @@ import {
     sendBotMessage,
 } from "@api/Commands";
 import definePlugin from "@utils/types";
+import type { CommandArgument, CommandContext } from "@vencord/discord-types";
 import { ChannelStore } from "@webpack/common";
 
 import { send } from "./api";
 import { addAllow, getAllowSet, isAllowed, removeAllow } from "./allowlist";
-import { backfillChannel } from "./backfill";
+import { backfillChannel, resumeAll } from "./backfill";
 import { ingestRaw } from "./ingest";
 import { settings } from "./settings";
 
@@ -30,9 +31,84 @@ interface SearchSource {
     score: number;
 }
 
-function reply(channelId: string, content: string) {
-    sendBotMessage(channelId, { content });
+const reply = (channelId: string, content: string) => sendBotMessage(channelId, { content });
+
+const guildOf = (channelId: string): string | null =>
+    ChannelStore.getChannel(channelId)?.guild_id ?? null;
+
+// ---- Subcommand handlers ----------------------------------------------------
+
+function allowExec(ctx: CommandContext) {
+    const id = ctx.channel.id;
+    addAllow(id);
+    reply(id, `✅ Now indexing this channel (\`${id}\`). New messages ingest live — run \`/bettersearch backfill\` to index its history.`);
 }
+
+function disallowExec(ctx: CommandContext) {
+    const id = ctx.channel.id;
+    removeAllow(id);
+    reply(id, `🚫 Stopped indexing this channel (\`${id}\`). Already-indexed messages remain searchable.`);
+}
+
+function listExec(ctx: CommandContext) {
+    const ids = [...getAllowSet()];
+    reply(
+        ctx.channel.id,
+        ids.length
+            ? `**Indexed channels/servers (${ids.length}):**\n${ids.map(i => "`" + i + "`").join(", ")}`
+            : "Nothing is being indexed yet. Use `/bettersearch allow` in a channel or DM, or paste a server ID into the plugin's Allowlist setting.",
+    );
+}
+
+async function statusExec(ctx: CommandContext) {
+    const id = ctx.channel.id;
+    const here = isAllowed(id, guildOf(id));
+    try {
+        const h = await send<any>("/health", {});
+        reply(
+            id,
+            `**BetterSearch status**\n• Backend: \`${settings.store.backendUrl}\` ✅\n• Indexed: ${h.messages ?? "?"} messages / ${h.records ?? "?"} records\n• This channel: ${here ? "indexed ✅" : "not indexed"}\n• Live ingest: ${settings.store.liveIngest ? "on" : "off"}`,
+        );
+    } catch (err) {
+        reply(id, `⚠️ Backend at \`${settings.store.backendUrl}\` unreachable: ${err instanceof Error ? err.message : err}\n(Start it: \`cd BetterSearch/server && bun run start\`)`);
+    }
+}
+
+function backfillExec(opts: CommandArgument[], ctx: CommandContext) {
+    const id = ctx.channel.id;
+    const limit = findOption<number>(opts, "limit", settings.store.backfillLimit);
+    if (!isAllowed(id, guildOf(id))) addAllow(id);
+    reply(id, `⏳ Backfilling up to ${limit} messages here. Live progress shows in the plugin settings panel and toasts.`);
+    backfillChannel(id, limit).catch(err => console.error("[BetterSearch] backfill failed:", err));
+}
+
+async function searchExec(opts: CommandArgument[], ctx: CommandContext) {
+    const id = ctx.channel.id;
+    const query = findOption<string>(opts, "query", "");
+    if (!query) {
+        reply(id, "Usage: `/bettersearch search query:<text>`");
+        return;
+    }
+    try {
+        const res = await send<{ answer: string | null; sources: SearchSource[]; related: SearchSource[]; }>("/search", {
+            query,
+            topK: 12,
+            synthesize: true,
+        });
+        const cited = (res.sources || [])
+            .map((s, i) => `**[${i + 1}]** ${s.authorName} · ${s.isDM ? "DM" : "#" + s.channelName}${s.sourceType === "attachment" ? " 📎 " + (s.attachmentName ?? "file") : ""} — [jump](${s.jumpLink})`)
+            .join("\n");
+        const extra = res.related?.length ? `\n\n_+${res.related.length} other related match(es)._` : "";
+        reply(
+            id,
+            `🔎 **${query}**\n\n${res.answer ?? "_No answer._"}\n\n${cited || "_No confident sources._"}${extra}`,
+        );
+    } catch (err) {
+        reply(id, `⚠️ Search failed: ${err instanceof Error ? err.message : err}`);
+    }
+}
+
+// ---- Plugin -----------------------------------------------------------------
 
 export default definePlugin({
     name: "BetterSearch",
@@ -46,9 +122,7 @@ export default definePlugin({
             if (optimistic || !settings.store.liveIngest) return;
             const channelId = message?.channel_id;
             if (!channelId) return;
-            const channel = ChannelStore.getChannel(channelId);
-            const guildId = channel?.guild_id ?? null;
-            if (!isAllowed(channelId, guildId)) return;
+            if (!isAllowed(channelId, guildOf(channelId))) return;
             try {
                 await ingestRaw(message);
             } catch (err) {
@@ -60,125 +134,64 @@ export default definePlugin({
     commands: [
         {
             name: "bettersearch",
-            description: "Manage BetterSearch ingestion and run searches",
+            description: "Manage BetterSearch indexing and run searches",
             inputType: ApplicationCommandInputType.BUILT_IN,
             options: [
+                { name: "allow", description: "Index this channel/DM (add to the allowlist)", type: ApplicationCommandOptionType.SUB_COMMAND, options: [] },
+                { name: "disallow", description: "Stop indexing this channel/DM", type: ApplicationCommandOptionType.SUB_COMMAND, options: [] },
+                { name: "list", description: "Show everything being indexed", type: ApplicationCommandOptionType.SUB_COMMAND, options: [] },
+                { name: "status", description: "Backend connection + indexed counts", type: ApplicationCommandOptionType.SUB_COMMAND, options: [] },
                 {
-                    name: "action",
-                    description: "What to do",
-                    type: ApplicationCommandOptionType.STRING,
-                    required: true,
-                    choices: [
-                        { name: "allow (ingest this channel)", value: "allow", label: "allow" },
-                        { name: "disallow (stop ingesting this channel)", value: "disallow", label: "disallow" },
-                        { name: "list (show allowlist)", value: "list", label: "list" },
-                        { name: "status", value: "status", label: "status" },
-                        { name: "backfill (index this channel's history)", value: "backfill", label: "backfill" },
-                        { name: "search", value: "search", label: "search" },
+                    name: "backfill",
+                    description: "Index this channel's past messages & media",
+                    type: ApplicationCommandOptionType.SUB_COMMAND,
+                    options: [
+                        {
+                            name: "limit",
+                            description: "How many past messages to index (default from plugin settings)",
+                            type: ApplicationCommandOptionType.INTEGER,
+                            required: false,
+                        },
                     ],
                 },
                 {
-                    name: "query",
-                    description: "Search query (for action: search)",
-                    type: ApplicationCommandOptionType.STRING,
-                    required: false,
-                },
-                {
-                    name: "limit",
-                    description: "Max messages to backfill (default 1000)",
-                    type: ApplicationCommandOptionType.INTEGER,
-                    required: false,
+                    name: "search",
+                    description: "Search your indexed history",
+                    type: ApplicationCommandOptionType.SUB_COMMAND,
+                    options: [
+                        {
+                            name: "query",
+                            description: "What to search for",
+                            type: ApplicationCommandOptionType.STRING,
+                            required: true,
+                        },
+                    ],
                 },
             ],
-            async execute(args, ctx) {
-                const action = findOption<string>(args, "action", "status");
-                const channelId = ctx.channel.id;
-                const channel = ChannelStore.getChannel(channelId);
-                const guildId = channel?.guild_id ?? null;
-
-                switch (action) {
-                    case "allow": {
-                        addAllow(channelId);
-                        reply(
-                            channelId,
-                            `✅ Allowlisted this channel (\`${channelId}\`). New messages will be ingested. Run \`/bettersearch backfill\` to index history.`,
-                        );
-                        return;
-                    }
-                    case "disallow": {
-                        removeAllow(channelId);
-                        reply(channelId, `🚫 Removed this channel (\`${channelId}\`) from the allowlist.`);
-                        return;
-                    }
-                    case "list": {
-                        const ids = [...getAllowSet()];
-                        reply(
-                            channelId,
-                            ids.length
-                                ? `**Allowlisted IDs (${ids.length}):**\n${ids.map(i => "`" + i + "`").join(", ")}`
-                                : "Allowlist is empty. Use `/bettersearch allow` in a channel or DM.",
-                        );
-                        return;
-                    }
-                    case "status": {
-                        const allowed = isAllowed(channelId, guildId);
-                        try {
-                            const health = await send<any>("/health", {});
-                            reply(
-                                channelId,
-                                `**BetterSearch status**\n• Backend: \`${settings.store.backendUrl}\` ✅\n• Indexed: ${health.messages ?? "?"} messages / ${health.records ?? "?"} records\n• This channel: ${allowed ? "allowlisted ✅" : "not allowlisted"}\n• Live ingest: ${settings.store.liveIngest ? "on" : "off"}`,
-                            );
-                        } catch (err) {
-                            reply(
-                                channelId,
-                                `⚠️ Could not reach backend at \`${settings.store.backendUrl}\`: ${err instanceof Error ? err.message : err}\nThis channel: ${allowed ? "allowlisted" : "not allowlisted"}.`,
-                            );
-                        }
-                        return;
-                    }
-                    case "backfill": {
-                        if (!isAllowed(channelId, guildId)) addAllow(channelId);
-                        const limit = findOption<number>(args, "limit", 1000);
-                        reply(channelId, `⏳ Backfilling up to ${limit} messages from this channel. Progress shows in toasts.`);
-                        // Fire-and-forget; long-running with its own toast progress.
-                        backfillChannel(channelId, limit).catch(err =>
-                            console.error("[BetterSearch] backfill failed:", err),
-                        );
-                        return;
-                    }
-                    case "search": {
-                        const query = findOption<string>(args, "query", "");
-                        if (!query) {
-                            reply(channelId, "Provide a query: `/bettersearch search query:<text>`");
-                            return;
-                        }
-                        try {
-                            const res = await send<{ answer: string | null; sources: SearchSource[] }>("/search", {
-                                query,
-                                topK: 8,
-                                synthesize: true,
-                            });
-                            const top = (res.sources || [])
-                                .slice(0, 5)
-                                .map((s, i) => `**[${i + 1}]** ${s.authorName} · ${s.isDM ? "DM" : "#" + s.channelName} — [jump](${s.jumpLink})`)
-                                .join("\n");
-                            reply(
-                                channelId,
-                                `🔎 **${query}**\n\n${res.answer ?? "_No answer synthesized._"}\n\n${top || "_No sources._"}`,
-                            );
-                        } catch (err) {
-                            reply(channelId, `⚠️ Search failed: ${err instanceof Error ? err.message : err}`);
-                        }
-                        return;
-                    }
-                    default:
-                        reply(channelId, "Unknown action.");
+            execute(args: CommandArgument[], ctx: CommandContext) {
+                // Subcommands arrive as args[0] = { name, options: [...] }.
+                const sub = args[0]?.name;
+                const opts = (args[0] as any)?.options ?? [];
+                switch (sub) {
+                    case "allow": return allowExec(ctx);
+                    case "disallow": return disallowExec(ctx);
+                    case "list": return listExec(ctx);
+                    case "status": return statusExec(ctx);
+                    case "backfill": return backfillExec(opts, ctx);
+                    case "search": return searchExec(opts, ctx);
+                    default: reply(ctx.channel.id, "Unknown subcommand.");
                 }
             },
         },
     ],
 
-    start() {
+    async start() {
         console.log("[BetterSearch] started. Backend:", settings.store.backendUrl);
+        // Resume interrupted backfills + catch up missed live messages from downtime.
+        try {
+            await resumeAll([...getAllowSet()]);
+        } catch (err) {
+            console.error("[BetterSearch] resume/catch-up failed:", err);
+        }
     },
 });

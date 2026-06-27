@@ -71,10 +71,10 @@ export async function search(
   topK: number,
   filter?: Record<string, unknown>,
 ): Promise<SearchSource[]> {
-  const topN = Math.min(topK, 10);
+  const topN = Math.min(topK, 20);
   const res = await index().searchRecords({
     query: {
-      topK: Math.max(topK, topN * 2),
+      topK: Math.max(topK * 2, 30),
       inputs: { text: query },
       ...(filter ? { filter } : {}),
     },

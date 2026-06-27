@@ -66,7 +66,13 @@
         white-space: pre-wrap; display: none;
       }
       .answer .label { color: var(--good); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
-      .sources { margin-top: 22px; display: grid; gap: 12px; }
+      .srcHead { margin-top: 24px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+      .sources { margin-top: 12px; display: grid; gap: 12px; }
+      details.related { margin-top: 4px; }
+      details.related > summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0; list-style: none; }
+      details.related > summary:hover { color: var(--text); }
+      details.related[open] > summary { margin-bottom: 10px; }
+      details.related > .card { margin-bottom: 12px; }
       .card {
         background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
         transition: border-color 0.15s;
@@ -106,7 +112,9 @@
       </div>
 
       <div id="answer" class="answer"></div>
+      <div id="srcHead" class="srcHead" style="display:none">Sources</div>
       <div id="sources" class="sources"></div>
+      <div id="related" class="sources"></div>
       <div id="status" class="status">Enter your API token and a query to begin.</div>
     </div>
 
@@ -140,6 +148,8 @@
         $("status").textContent = "Searching…";
         $("answer").style.display = "none";
         $("sources").innerHTML = "";
+        $("related").innerHTML = "";
+        $("srcHead").style.display = "none";
 
         const filter = {};
         if (state.dm) filter.isDM = { $eq: true };
@@ -169,35 +179,50 @@
         }
       }
 
+      function card(s, i) {
+        const date = s.timestamp ? new Date(s.timestamp).toLocaleString() : "";
+        const where = s.isDM ? "DM" : "#" + esc(s.channelName);
+        const filePill = s.sourceType === "attachment"
+          ? `<span class="pill file">📎 ${esc(s.attachmentName || "file")}</span>` : "";
+        const num = i == null ? "" : `<span class="pill">${i + 1}</span>`;
+        return `<div class="card">
+          <a class="jump" href="${esc(s.jumpLink)}" target="_blank" rel="noopener">open in Discord ↗</a>
+          <div class="meta">
+            ${num}
+            <strong style="color:#cfd5e3">${esc(s.authorName)}</strong>
+            <span>${where}</span>${filePill}
+            <span>${esc(date)}</span>
+            <span class="score">· ${s.score.toFixed(3)}</span>
+          </div>
+          <div class="body">${esc(s.text)}</div>
+        </div>`;
+      }
+
       function render(data) {
         if (data.answer) {
           $("answer").innerHTML = '<div class="label">Answer</div>' + esc(data.answer);
           $("answer").style.display = "block";
         }
-        if (!data.sources || data.sources.length === 0) {
+        const sources = data.sources || [];
+        const related = data.related || [];
+        if (sources.length === 0 && related.length === 0) {
           $("status").textContent = "No matching messages found.";
           return;
         }
         $("status").textContent = "";
-        $("sources").innerHTML = data.sources
-          .map((s, i) => {
-            const date = s.timestamp ? new Date(s.timestamp).toLocaleString() : "";
-            const where = s.isDM ? "DM" : "#" + esc(s.channelName);
-            const filePill = s.sourceType === "attachment"
-              ? `<span class="pill file">📎 ${esc(s.attachmentName || "file")}</span>` : "";
-            return `<div class="card">
-              <a class="jump" href="${esc(s.jumpLink)}" target="_blank" rel="noopener">open in Discord ↗</a>
-              <div class="meta">
-                <span class="pill">${i + 1}</span>
-                <strong style="color:#cfd5e3">${esc(s.authorName)}</strong>
-                <span>${where}</span>${filePill}
-                <span>${esc(date)}</span>
-                <span class="score">· ${s.score.toFixed(3)}</span>
-              </div>
-              <div class="body">${esc(s.text)}</div>
-            </div>`;
-          })
-          .join("");
+        // Cited sources (the accurate ones the answer used)
+        $("srcHead").style.display = sources.length ? "block" : "none";
+        $("srcHead").textContent = data.answer ? "Cited sources" : "Top matches";
+        $("sources").innerHTML = sources.map((s, i) => card(s, data.answer ? i : null)).join("");
+        // Related, collapsed by default
+        if (related.length) {
+          $("related").innerHTML =
+            `<details class="related"><summary>${related.length} other related match${related.length > 1 ? "es" : ""}</summary>`
+            + related.map((s) => card(s, null)).join("")
+            + `</details>`;
+        } else {
+          $("related").innerHTML = "";
+        }
       }
 
       $("go").addEventListener("click", doSearch);

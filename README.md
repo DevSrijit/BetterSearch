@@ -29,6 +29,12 @@ flowchart LR
   unified text vector space, so "find the staging password screenshot" is a plain search.
 - **Native bridge.** The plugin makes backend calls from Vencord's Electron **main** process, not
   the renderer, avoiding CORS / mixed-content entirely and allowing DM attachment fetches.
+- **Cheap + Zero Data Retention.** Synthesis runs on `deepseek/deepseek-v4-flash`
+  (**~$0.09 in / $0.18 out per million** — ~14× cheaper than flash-tier proprietary models, 1M
+  context); OCR stays on `google/gemini-2.5-flash`. With `BS_ZDR_ONLY=true` (default), **every**
+  OpenRouter call sends `provider: { zdr: true, data_collection: "deny" }`, so requests only route to
+  Zero-Data-Retention, non-collecting providers — both defaults are verified to have a ZDR endpoint.
+  Pick a model with no ZDR endpoint and OpenRouter 404s (fails loud, never silently retains).
 
 ## Layout
 
@@ -68,18 +74,34 @@ See [`plugin/README.md`](plugin/README.md) for details.
 
 ## Usage
 
-In any DM or channel:
+In any DM or channel — each is a **subcommand**, so it only shows the options it actually uses:
 
-| Command | Effect |
-|---|---|
-| `/bettersearch allow` | Allowlist the current channel/DM for ingestion |
-| `/bettersearch backfill limit:2000` | Index this channel's history (allowlists it first) |
-| `/bettersearch list` | Show the allowlist |
-| `/bettersearch status` | Backend reachability + indexed counts |
-| `/bettersearch search query:<text>` | Quick search in Discord |
-| `/bettersearch disallow` | Stop ingesting this channel |
+| Command | Options | Effect |
+|---|---|---|
+| `/bettersearch allow` | — | Index the current channel/DM (adds it to the allowlist) |
+| `/bettersearch backfill` | `limit?` | Index this channel's history; defaults to the plugin's **Default backfill limit** setting. Resumable. |
+| `/bettersearch list` | — | Show everything being indexed |
+| `/bettersearch status` | — | Backend reachability + indexed counts |
+| `/bettersearch search` | `query` | Quick search in Discord |
+| `/bettersearch disallow` | — | Stop ingesting this channel |
 
 New messages in allowlisted channels are ingested live. **Only allowlisted channels are ever sent.**
+
+### Robustness
+
+- **Dedup** — every message is content-hashed; backfill and live ingest skip anything already
+  indexed (and don't re-spend Pinecone writes). Edited messages re-index in place.
+- **Resumable backfill** — progress is checkpointed to the backend cursor after every page and the
+  job is persisted, so an abrupt quit auto-resumes on next launch.
+- **Live catch-up** — on startup the plugin pulls any messages that arrived in allowlisted channels
+  while Discord was closed, so live ingest survives downtime.
+- Live progress (backfill + catch-up) shows in the plugin's settings panel and in toasts.
+
+### Search relevance
+
+`/search` and the web UI return **only the sources the answer actually cited** (precision over
+recall) — other topically-similar matches are tucked into a collapsible "related" list. This keeps
+the source link trustworthy when you're hunting for a specific file or message.
 
 ### Try it
 

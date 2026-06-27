@@ -1,7 +1,14 @@
 import { definePluginSettings } from "@api/Settings";
 import { OptionType } from "@utils/types";
 
+import { BackfillStatus } from "./BackfillStatus";
+
 export const settings = definePluginSettings({
+    status: {
+        type: OptionType.COMPONENT,
+        description: "Backfill / catch-up status",
+        component: BackfillStatus,
+    },
     backendUrl: {
         type: OptionType.STRING,
         description: "BetterSearch backend base URL",
@@ -21,6 +28,11 @@ export const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         description: "Send attachments (images, PDFs, docs) for text extraction",
         default: true,
+    },
+    backfillLimit: {
+        type: OptionType.NUMBER,
+        description: "Default number of past messages to index when you run /bettersearch backfill without a limit",
+        default: 1000,
     },
     allowlist: {
         type: OptionType.STRING,

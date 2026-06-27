@@ -30,8 +30,12 @@ export const config = {
   // OpenRouter
   openrouterApiKey: required("OPENROUTER_API_KEY"),
   openrouterBase: optional("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+  // Vision (OCR) stays on a strong model; chat synthesis uses a dirt-cheap one.
+  // Both are verified to have Zero-Data-Retention providers on OpenRouter.
   visionModel: optional("OPENROUTER_VISION_MODEL", "google/gemini-2.5-flash"),
-  chatModel: optional("OPENROUTER_CHAT_MODEL", "google/gemini-2.5-flash"),
+  chatModel: optional("OPENROUTER_CHAT_MODEL", "deepseek/deepseek-v4-flash"),
+  // ZDR enforcement: only route to Zero-Data-Retention, non-collecting providers.
+  zdrOnly: optional("BS_ZDR_ONLY", "true") === "true",
 
   // Access control — shared bearer secret for /ingest and /search.
   apiToken: required("BS_API_TOKEN"),
@@ -40,4 +44,7 @@ export const config = {
   chunkChars: Number(optional("BS_CHUNK_CHARS", "1200")),
   chunkOverlap: Number(optional("BS_CHUNK_OVERLAP", "150")),
   maxAttachmentBytes: Number(optional("BS_MAX_ATTACHMENT_BYTES", String(20 * 1024 * 1024))),
+
+  // Search tuning — rerank-score floor for the "related" matches list.
+  minScore: Number(optional("BS_MIN_SCORE", "0.05")),
 } as const;

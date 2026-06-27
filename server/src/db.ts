@@ -22,9 +22,17 @@ db.exec(`
     channel_id TEXT PRIMARY KEY,
     oldest_backfilled TEXT,
     newest_seen TEXT,
+    backfill_complete INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL
   );
 `);
+
+// Migration for DBs created before backfill_complete existed.
+try {
+  db.exec("ALTER TABLE channel_cursor ADD COLUMN backfill_complete INTEGER NOT NULL DEFAULT 0;");
+} catch {
+  // column already exists
+}
 
 const getStmt = db.query<{ content_hash: string }, [string]>(
   "SELECT content_hash FROM ingested WHERE message_id = ?",
@@ -65,6 +73,38 @@ export function updateCursor(
     $newest: opts.newest ?? null,
     $ts: Date.now(),
   });
+}
+
+const cursorGet = db.query<
+  { oldest_backfilled: string | null; newest_seen: string | null; backfill_complete: number },
+  [string]
+>("SELECT oldest_backfilled, newest_seen, backfill_complete FROM channel_cursor WHERE channel_id = ?");
+
+export interface ChannelCursor {
+  oldest: string | null;
+  newest: string | null;
+  complete: boolean;
+}
+
+/** Where ingestion left off for a channel — drives resume + live catch-up. */
+export function getCursor(channelId: string): ChannelCursor {
+  const row = cursorGet.get(channelId);
+  return {
+    oldest: row?.oldest_backfilled ?? null,
+    newest: row?.newest_seen ?? null,
+    complete: !!row?.backfill_complete,
+  };
+}
+
+const completePut = db.query(
+  `INSERT INTO channel_cursor (channel_id, backfill_complete, updated_at)
+   VALUES ($cid, $c, $ts)
+   ON CONFLICT(channel_id) DO UPDATE SET backfill_complete = $c, updated_at = $ts`,
+);
+
+/** Mark a channel as fully backfilled (reached the start of its history). */
+export function setBackfillComplete(channelId: string, complete: boolean): void {
+  completePut.run({ $cid: channelId, $c: complete ? 1 : 0, $ts: Date.now() });
 }
 
 export function stats(): { messages: number; records: number } {

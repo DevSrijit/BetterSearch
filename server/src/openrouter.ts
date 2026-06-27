@@ -24,6 +24,7 @@ async function chatCompletion(
   model: string,
   messages: ChatMessage[],
   maxTokens = 1024,
+  jsonMode = false,
 ): Promise<string> {
   const res = await fetch(`${config.openrouterBase}/chat/completions`, {
     method: "POST",
@@ -33,7 +34,23 @@ async function chatCompletion(
       "HTTP-Referer": "https://github.com/bettersearch",
       "X-Title": "BetterSearch",
     },
-    body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: 0.2 }),
+    body: JSON.stringify({
+      model,
+      messages,
+      max_tokens: maxTokens,
+      temperature: 0.2,
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+      // Zero Data Retention: only route to ZDR + non-data-collecting providers.
+      ...(config.zdrOnly
+        ? {
+            provider: {
+              zdr: true,
+              data_collection: "deny",
+              ...(jsonMode ? { require_parameters: true } : {}),
+            },
+          }
+        : {}),
+    }),
   });
   if (!res.ok) {
     throw new Error(`OpenRouter ${model} ${res.status}: ${await res.text()}`);
@@ -55,25 +72,63 @@ export async function vision(dataUrl: string): Promise<string> {
   ]);
 }
 
-/** Synthesize a grounded answer from retrieved sources. */
+export interface Synthesis {
+  answer: string;
+  /** 1-based source numbers that DIRECTLY support the answer (precision over recall). */
+  citations: number[];
+}
+
+/**
+ * Synthesize a grounded answer and report exactly which sources it relied on.
+ * The caller shows only the cited sources, so relevance is tied to the answer
+ * rather than to raw semantic similarity.
+ */
 export async function synthesize(
   query: string,
   context: { idx: number; text: string; meta: string; jumpLink: string }[],
-): Promise<string> {
-  if (context.length === 0) return "No matching messages were found.";
+): Promise<Synthesis> {
+  if (context.length === 0) return { answer: "No matching messages were found.", citations: [] };
   const ctx = context
-    .map((c) => `[${c.idx}] (${c.meta})\n${c.text}\nlink: ${c.jumpLink}`)
+    .map((c) => `[${c.idx}] (${c.meta})\n${c.text}`)
     .join("\n\n");
 
-  return chatCompletion(config.chatModel, [
-    {
-      role: "system",
-      content:
-        "You are BetterSearch, answering questions over a team's Discord history " +
-        "(messages, screenshots, PDFs, docs). Answer ONLY from the numbered sources. " +
-        "Quote exact values for credentials, keys, URLs, and instructions. Cite sources " +
-        "inline like [1], [2]. If the answer isn't in the sources, say so plainly. Be concise.",
-    },
-    { role: "user", content: `Question: ${query}\n\nSources:\n${ctx}` },
-  ]);
+  const raw = await chatCompletion(
+    config.chatModel,
+    [
+      {
+        role: "system",
+        content:
+          "You are BetterSearch, answering questions over a team's Discord history " +
+          "(messages, screenshots, PDFs, docs). Answer ONLY from the numbered sources. " +
+          "Quote exact values for credentials, keys, URLs, file names, and instructions. " +
+          "Cite inline like [1], [2].\n" +
+          "CRITICAL — relevance: in `citations`, list ONLY the source numbers that DIRECTLY " +
+          "contain the answer. Do NOT include sources that are merely topically similar. " +
+          "For 'find the file/attachment/message' questions, cite the single exact source that " +
+          "is the file/message, not other mentions of it. Fewer, correct citations beat many. " +
+          "If the answer is not in the sources, set answer to say so and citations to [].\n" +
+          'Respond with JSON: {"answer": string, "citations": number[]}.',
+      },
+      { role: "user", content: `Question: ${query}\n\nSources:\n${ctx}` },
+    ],
+    1024,
+    true,
+  );
+
+  // Parse structured output; fall back to regex over inline [n] markers.
+  let answer = raw;
+  let citations: number[] = [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.answer === "string") answer = parsed.answer;
+    if (Array.isArray(parsed.citations)) {
+      citations = parsed.citations.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n));
+    }
+  } catch {
+    // not JSON — leave answer as-is, citations derived below
+  }
+  if (citations.length === 0) {
+    citations = [...answer.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
+  }
+  return { answer, citations };
 }

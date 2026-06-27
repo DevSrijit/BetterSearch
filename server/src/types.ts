@@ -67,7 +67,10 @@ export interface SearchSource {
 export interface SearchResult {
   query: string;
   answer: string | null;
+  /** Sources the answer actually cited (renumbered to match the answer). */
   sources: SearchSource[];
+  /** Other above-threshold matches, for optional exploration. */
+  related: SearchSource[];
 }
 
 /** A record ready to upsert via Pinecone integrated inference. */
